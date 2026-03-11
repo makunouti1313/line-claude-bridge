@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: line-claude-bridge
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: node dist/server.js
+    envVars:
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AGENT_API_KEY
+        sync: false
