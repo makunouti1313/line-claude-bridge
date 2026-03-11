@@ -1,20 +1,3 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-
-const db = new Database(path.join(__dirname, '..', 'tasks.db'));
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    line_user_id TEXT NOT NULL,
-    instruction TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    result TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-  )
-`);
-
 export type Task = {
   id: number;
   line_user_id: string;
@@ -25,29 +8,40 @@ export type Task = {
   updated_at: number;
 };
 
+let nextId = 1;
+const tasks = new Map<number, Task>();
+
 export const taskDb = {
   create(line_user_id: string, instruction: string): Task {
-    const stmt = db.prepare(
-      'INSERT INTO tasks (line_user_id, instruction) VALUES (?, ?) RETURNING *'
-    );
-    return stmt.get(line_user_id, instruction) as Task;
+    const task: Task = {
+      id: nextId++,
+      line_user_id,
+      instruction,
+      status: 'pending',
+      result: null,
+      created_at: Math.floor(Date.now() / 1000),
+      updated_at: Math.floor(Date.now() / 1000),
+    };
+    tasks.set(task.id, task);
+    return task;
   },
 
   getPending(): Task[] {
-    return db.prepare("SELECT * FROM tasks WHERE status = 'pending' ORDER BY created_at ASC").all() as Task[];
+    return [...tasks.values()].filter(t => t.status === 'pending');
   },
 
   setInProgress(id: number): void {
-    db.prepare("UPDATE tasks SET status = 'in_progress', updated_at = unixepoch() WHERE id = ?").run(id);
+    const t = tasks.get(id);
+    if (t) { t.status = 'in_progress'; t.updated_at = Math.floor(Date.now() / 1000); }
   },
 
   complete(id: number, result: string): void {
-    db.prepare("UPDATE tasks SET status = 'completed', result = ?, updated_at = unixepoch() WHERE id = ?").run(result, id);
+    const t = tasks.get(id);
+    if (t) { t.status = 'completed'; t.result = result; t.updated_at = Math.floor(Date.now() / 1000); }
   },
 
   setError(id: number, error: string): void {
-    db.prepare("UPDATE tasks SET status = 'error', result = ?, updated_at = unixepoch() WHERE id = ?").run(error, id);
+    const t = tasks.get(id);
+    if (t) { t.status = 'error'; t.result = error; t.updated_at = Math.floor(Date.now() / 1000); }
   },
 };
-
-export default db;
