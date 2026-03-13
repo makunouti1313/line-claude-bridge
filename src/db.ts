@@ -30,6 +30,10 @@ export const taskDb = {
     return tasks.get(id);
   },
 
+  getAwaitingApproval(): Task[] {
+    return [...tasks.values()].filter(t => t.status === 'awaiting_approval');
+  },
+
   getApproved(): Task[] {
     return [...tasks.values()].filter(t => t.status === 'approved');
   },

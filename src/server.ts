@@ -27,7 +27,7 @@ function buildApprovalCard(task: { id: number; instruction: string }): string {
     `[Risk]: コード変更あり / git revertで復元可能`,
     `[Cost/Reversibility]: 無償 / 可逆`,
     ``,
-    `実行する場合は「GO ${task.id}」と返信してください。`,
+    `実行する場合は「承認」「やって」「OK」などと返信してください。`,
   ].join('\n');
 }
 
@@ -50,16 +50,40 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
       continue;
     }
 
-    // 承認コマンド: "GO 42" or "Approve 42"
-    const approvalMatch = userText.match(/^(?:GO|Approve)\s+(\d+)$/i);
-    if (approvalMatch) {
-      const id = Number(approvalMatch[1]);
-      const task = taskDb.approve(id);
-      const reply = task
-        ? `✅ タスク ${id} を承認しました。実行します。`
-        : `⚠️ タスク ${id} が見つからないか、承認待ち状態ではありません。`;
-      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: reply }] });
-      continue;
+    // 承認待ちタスクがある場合、自然言語で承認判定
+    const waitingTasks = taskDb.getAwaitingApproval();
+    if (waitingTasks.length > 0) {
+      const intentRes = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `ユーザーのメッセージが「タスクの承認」を意図しているかを判定してください。
+承認の例: 「承認」「やって」「OK」「いいよ」「お願い」「進めて」「実行して」「やろう」「GO」「はい」「頼む」など。
+返答はJSONのみ: {"approved": true, "taskId": null} または {"approved": false}
+taskIdはメッセージ中に数字があればその数値、なければnull。`,
+          },
+          { role: 'user', content: userText },
+        ],
+        max_tokens: 50,
+      });
+
+      let intent: { approved: boolean; taskId: number | null } = { approved: false, taskId: null };
+      try {
+        const raw = intentRes.choices[0].message.content ?? '{}';
+        intent = JSON.parse(raw.match(/\{.*\}/s)?.[0] ?? '{}');
+      } catch { /* パース失敗は承認なしとみなす */ }
+
+      if (intent.approved) {
+        // IDが指定されていればそのタスク、なければ最新の承認待ちタスク
+        const targetId = intent.taskId ?? waitingTasks[waitingTasks.length - 1].id;
+        const task = taskDb.approve(targetId);
+        const reply = task
+          ? `✅ タスク ${targetId} を承認しました。実行します。`
+          : `⚠️ 承認待ちのタスクが見つかりませんでした。`;
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: reply }] });
+        continue;
+      }
     }
 
     // 通常メッセージ → Groqで指示変換 → 承認カード送信
