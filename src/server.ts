@@ -7,6 +7,11 @@ import { taskDb } from './db';
 const app = express();
 const PORT = process.env.PORT || 3002;
 
+// Lancers ジョブストア（メモリ）
+type LancersJob = { id: string; title: string; url: string; proposal: string; budgetText: string; score: number; scoreLabel: string };
+const lancersJobs = new Map<string, LancersJob>();
+let lancersJobCounter = 0;
+
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
   channelSecret: process.env.LINE_CHANNEL_SECRET!,
@@ -31,6 +36,37 @@ function buildApprovalCard(task: { id: number; instruction: string }): string {
   ].join('\n');
 }
 
+// pipeline.js からLancers高スコア案件を受け取ってLINEに承認カードを送信
+app.post('/lancers/job', express.json(), async (req, res) => {
+  const secret = req.headers['x-lancers-secret'];
+  if (process.env.LANCERS_API_SECRET && secret !== process.env.LANCERS_API_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  const job = req.body as Omit<LancersJob, 'id'>;
+  if (!job?.url || !job?.title) return res.status(400).json({ error: 'url and title required' });
+
+  const id = String(++lancersJobCounter).padStart(3, '0');
+  lancersJobs.set(id, { ...job, id });
+
+  const lineUserId = process.env.LINE_USER_ID;
+  if (lineUserId) {
+    const card = [
+      `📋 案件承認カード [ID: ${id}]`,
+      `${job.scoreLabel} (${job.score}点)`,
+      ``,
+      `【案件名】${job.title}`,
+      `【予算】${job.budgetText || '不明'}`,
+      `【URL】${job.url}`,
+      ``,
+      `✅ 応募 → "GO ${id}" と返信`,
+      `❌ スキップ → 無視でOK`,
+    ].join('\n');
+    await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: card }] }).catch(console.error);
+  }
+
+  res.json({ ok: true, id });
+});
+
 // LINE webhook
 app.post('/webhook', middleware(lineConfig), async (req, res) => {
   res.sendStatus(200);
@@ -47,6 +83,23 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
     // ID確認コマンド
     if (userText.toUpperCase() === 'ID') {
       await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `あなたのUser ID:\n${userId}` }] });
+      continue;
+    }
+
+    // "GO [ID]" — Lancers案件を即実行（承認カード不要）
+    const goMatch = userText.match(/^GO\s+(\d+)$/i);
+    if (goMatch) {
+      const lancersId = goMatch[1].padStart(3, '0');
+      const lancersJob = lancersJobs.get(lancersId);
+      if (!lancersJob) {
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `❌ ID: ${lancersId} の案件が見つかりません。\n案件は再起動でリセットされます。` }] });
+        continue;
+      }
+      // ジュニアへの指示を作成して即承認 → agent.tsが10秒以内に実行
+      const instruction = `以下のLancers案件の準備をしてください:\n\n1. この応募文をクリップボードにコピーする（Bashで: echo "${lancersJob.proposal.replace(/"/g, '\\"').replace(/\n/g, ' ')}" | clip）\n2. Windowsのブラウザでこのページを開く（Bashで: start "${lancersJob.url}"）\n3. "準備完了 [${lancersId}] ${lancersJob.title}" とだけ返答する\n\n応募文:\n${lancersJob.proposal}`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id); // 二度確認なしで即承認
+      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `⚙️ [${lancersId}] ジュニアに指示中...\n応募ページが開いたら貼り付けて送信してください。` }] });
       continue;
     }
 
