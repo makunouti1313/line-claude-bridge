@@ -18,6 +18,19 @@ const lineClient = new messagingApi.MessagingApiClient({
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+function buildApprovalCard(task: { id: number; instruction: string }): string {
+  return [
+    `🔐 承認カード`,
+    `[ID]: ${task.id}`,
+    `[Action]: ${task.instruction.slice(0, 80)}`,
+    `[Rationale]: ユーザーの要求に基づき即時実行`,
+    `[Risk]: コード変更あり / git revertで復元可能`,
+    `[Cost/Reversibility]: 無償 / 可逆`,
+    ``,
+    `実行する場合は「GO ${task.id}」と返信してください。`,
+  ].join('\n');
+}
+
 // LINE webhook
 app.post('/webhook', middleware(lineConfig), async (req, res) => {
   res.sendStatus(200);
@@ -28,9 +41,22 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
     if (event.type !== 'message' || event.message.type !== 'text') continue;
 
     const userId = event.source?.userId ?? 'unknown';
-    const userText = event.message.text;
+    const userText = event.message.text.trim();
+    const replyToken = (event as webhook.MessageEvent).replyToken ?? '';
 
-    // Groqで指示を整理
+    // 承認コマンド: "GO 42" or "Approve 42"
+    const approvalMatch = userText.match(/^(?:GO|Approve)\s+(\d+)$/i);
+    if (approvalMatch) {
+      const id = Number(approvalMatch[1]);
+      const task = taskDb.approve(id);
+      const reply = task
+        ? `✅ タスク ${id} を承認しました。実行します。`
+        : `⚠️ タスク ${id} が見つからないか、承認待ち状態ではありません。`;
+      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: reply }] });
+      continue;
+    }
+
+    // 通常メッセージ → Groqで指示変換 → 承認カード送信
     const groqRes = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
@@ -49,27 +75,21 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
     const instruction = groqRes.choices[0].message.content ?? userText;
     const task = taskDb.create(userId, instruction);
 
-    const replyToken = (event as webhook.MessageEvent).replyToken ?? '';
     await lineClient.replyMessage({
       replyToken,
-      messages: [
-        {
-          type: 'text',
-          text: `タスクを受け付けました（ID: ${task.id}）\n\n「${instruction}」\n\n完了したら結果を送ります。`,
-        },
-      ],
+      messages: [{ type: 'text', text: buildApprovalCard(task) }],
     });
   }
 });
 
-// エージェント用API（ローカルPCがポーリング）
+// エージェント用API
 app.use(express.json());
 
-app.get('/tasks/pending', (req, res) => {
+app.get('/tasks/approved', (req, res) => {
   if (req.headers['x-api-key'] !== process.env.AGENT_API_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  res.json(taskDb.getPending());
+  res.json(taskDb.getApproved());
 });
 
 app.post('/tasks/:id/complete', (req, res) => {
@@ -85,11 +105,10 @@ app.post('/tasks/:id/complete', (req, res) => {
     taskDb.complete(id, result ?? '');
   }
 
-  // LINEに結果を送信
   if (line_user_id) {
     const message = error
-      ? `タスク ${id} でエラーが発生しました。\n${error}`
-      : `タスク ${id} が完了しました。\n\n${result}`;
+      ? `❌ タスク ${id} でエラーが発生しました。\n${error}`
+      : `✅ タスク ${id} が完了しました。\n\n${result}`;
 
     lineClient.pushMessage({
       to: line_user_id,

@@ -2,7 +2,7 @@ export type Task = {
   id: number;
   line_user_id: string;
   instruction: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'error';
+  status: 'awaiting_approval' | 'approved' | 'in_progress' | 'completed' | 'error';
   result: string | null;
   created_at: number;
   updated_at: number;
@@ -17,7 +17,7 @@ export const taskDb = {
       id: nextId++,
       line_user_id,
       instruction,
-      status: 'pending',
+      status: 'awaiting_approval',
       result: null,
       created_at: Math.floor(Date.now() / 1000),
       updated_at: Math.floor(Date.now() / 1000),
@@ -26,13 +26,22 @@ export const taskDb = {
     return task;
   },
 
-  getPending(): Task[] {
-    return [...tasks.values()].filter(t => t.status === 'pending');
+  get(id: number): Task | undefined {
+    return tasks.get(id);
   },
 
-  setInProgress(id: number): void {
+  getApproved(): Task[] {
+    return [...tasks.values()].filter(t => t.status === 'approved');
+  },
+
+  approve(id: number): Task | null {
     const t = tasks.get(id);
-    if (t) { t.status = 'in_progress'; t.updated_at = Math.floor(Date.now() / 1000); }
+    if (t && t.status === 'awaiting_approval') {
+      t.status = 'approved';
+      t.updated_at = Math.floor(Date.now() / 1000);
+      return t;
+    }
+    return null;
   },
 
   complete(id: number, result: string): void {
