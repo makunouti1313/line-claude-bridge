@@ -110,24 +110,42 @@ async function sendDailyBriefing(): Promise<void> {
   try {
     const { default: Groq } = await import('groq-sdk');
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+    // Lancers案件パイプラインを実行して今日の状況を把握
+    let lancersContext = '';
+    try {
+      const pipelineResult = runClaude(
+        'C:/Users/merucari/.openclaw/workspace/ping-test/jobs.json を読んで、今日の日付（created_at）のpending案件数と最高スコア案件のタイトル・スコアを1行で要約してください。ファイルがなければ「案件データなし」と返してください。'
+      );
+      lancersContext = pipelineResult;
+    } catch {
+      lancersContext = '案件データ未取得';
+    }
+
     const res = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
           role: 'system',
-          content: `ゆうすけ（28歳、雀荘スタッフ、月収10万、副業でランサーズ月15〜20万目標）への朝のブリーフィングを作成。
-フリーランス/副業の具体的なチャンスや今日すべきアクションを3点に絞って日本語で報告。簡潔に。`,
+          content: `あなたはジュニア。ゆうすけ（28歳、雀荘スタッフ週3、月収10万、副業でランサーズ月20万目標）の相棒AI。
+毎朝自主的に状況報告と提案を送る。タメ口。お世辞なし。具体的に。150字以内。`,
         },
-        { role: 'user', content: '今日の市場機会と推奨アクションを教えて。' },
+        {
+          role: 'user',
+          content: `今日の朝のメッセージを作って。Lancers状況: ${lancersContext}。今日やるべき最重要アクション1つを明確に。`,
+        },
       ],
-      max_tokens: 400,
+      max_tokens: 200,
     });
 
     const briefing = res.choices[0].message.content ?? '';
+    const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+    const message = `☀️ ${now} ジュニアだ。\n\n${briefing}`;
+
     await fetch(`${SERVER_URL}/notify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': AGENT_API_KEY },
-      body: JSON.stringify({ to: lineUserId, message: `📋 朝のブリーフィング\n\n${briefing}` }),
+      body: JSON.stringify({ to: lineUserId, message }),
     });
     console.log(`[${new Date().toISOString()}] Daily briefing sent`);
   } catch (err) {
