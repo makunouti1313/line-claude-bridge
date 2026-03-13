@@ -44,6 +44,12 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
     const userText = event.message.text.trim();
     const replyToken = (event as webhook.MessageEvent).replyToken ?? '';
 
+    // ID確認コマンド
+    if (userText.toUpperCase() === 'ID') {
+      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `あなたのUser ID:\n${userId}` }] });
+      continue;
+    }
+
     // 承認コマンド: "GO 42" or "Approve 42"
     const approvalMatch = userText.match(/^(?:GO|Approve)\s+(\d+)$/i);
     if (approvalMatch) {
