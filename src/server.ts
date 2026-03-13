@@ -125,6 +125,16 @@ app.post('/tasks/:id/complete', (req, res) => {
   res.json({ ok: true });
 });
 
+// エージェントからのプッシュ通知代理送信
+app.post('/notify', async (req, res) => {
+  if (req.headers['x-api-key'] !== process.env.AGENT_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { to, message } = req.body as { to: string; message: string };
+  await lineClient.pushMessage({ to, messages: [{ type: 'text', text: message }] });
+  res.json({ ok: true });
+});
+
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {

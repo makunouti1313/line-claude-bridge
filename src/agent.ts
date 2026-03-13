@@ -124,16 +124,10 @@ async function sendDailyBriefing(): Promise<void> {
     });
 
     const briefing = res.choices[0].message.content ?? '';
-    await fetch(`https://api.line.me/v2/bot/message/push`, {
+    await fetch(`${SERVER_URL}/notify`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify({
-        to: lineUserId,
-        messages: [{ type: 'text', text: `📋 朝のブリーフィング\n\n${briefing}` }],
-      }),
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AGENT_API_KEY },
+      body: JSON.stringify({ to: lineUserId, message: `📋 朝のブリーフィング\n\n${briefing}` }),
     });
     console.log(`[${new Date().toISOString()}] Daily briefing sent`);
   } catch (err) {
