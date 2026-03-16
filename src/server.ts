@@ -48,7 +48,7 @@ app.post('/lancers/job', express.json(), async (req, res) => {
   const id = String(++lancersJobCounter).padStart(3, '0');
   lancersJobs.set(id, { ...job, id });
 
-  const lineUserId = process.env.LINE_USER_ID;
+  const lineUserId = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
   if (lineUserId) {
     const card = [
       `📋 案件承認カード [ID: ${id}]`,
