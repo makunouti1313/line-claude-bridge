@@ -3,14 +3,32 @@ import express from 'express';
 import { middleware, messagingApi, webhook } from '@line/bot-sdk';
 import Groq from 'groq-sdk';
 import { taskDb } from './db';
+import { readFileSync, writeFileSync } from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
 
-// Lancers ジョブストア（メモリ）
+// Lancers ジョブストア（ファイル永続化）
 type LancersJob = { id: string; title: string; url: string; proposal: string; budgetText: string; score: number; scoreLabel: string };
-const lancersJobs = new Map<string, LancersJob>();
-let lancersJobCounter = 0;
+const JOBS_FILE = '/tmp/lancers_jobs.json';
+
+function loadJobs(): { jobs: Map<string, LancersJob>; counter: number } {
+  try {
+    const data = JSON.parse(readFileSync(JOBS_FILE, 'utf8'));
+    return { jobs: new Map(Object.entries(data.jobs)), counter: data.counter ?? 0 };
+  } catch {
+    return { jobs: new Map(), counter: 0 };
+  }
+}
+
+function saveJobs(): void {
+  try {
+    writeFileSync(JOBS_FILE, JSON.stringify({ jobs: Object.fromEntries(lancersJobs), counter: lancersJobCounter }), 'utf8');
+  } catch { /* ignore */ }
+}
+
+const { jobs: lancersJobs, counter: lancersJobCounter0 } = loadJobs();
+let lancersJobCounter = lancersJobCounter0;
 
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
@@ -47,6 +65,7 @@ app.post('/lancers/job', express.json(), async (req, res) => {
 
   const id = String(++lancersJobCounter).padStart(3, '0');
   lancersJobs.set(id, { ...job, id });
+  saveJobs();
 
   const lineUserId = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
   if (lineUserId) {
@@ -96,7 +115,16 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         continue;
       }
       // ジュニアへの指示を作成して即承認 → agent.tsが10秒以内に実行
-      const instruction = `以下のLancers案件の準備をしてください:\n\n1. この応募文をクリップボードにコピーする（Bashで: echo "${lancersJob.proposal.replace(/"/g, '\\"').replace(/\n/g, ' ')}" | clip）\n2. Windowsのブラウザでこのページを開く（Bashで: start "${lancersJob.url}"）\n3. "準備完了 [${lancersId}] ${lancersJob.title}" とだけ返答する\n\n応募文:\n${lancersJob.proposal}`;
+      const instruction = `以下のLancers案件の応募準備をしてください。
+
+手順:
+1. Writeツールで応募文を C:\\Windows\\Temp\\proposal_${lancersId}.txt に保存する
+2. Bashで実行: type "C:\\Windows\\Temp\\proposal_${lancersId}.txt" | clip
+3. Bashで実行: start "" "${lancersJob.url}"
+4. "準備完了 [${lancersId}] ${lancersJob.title}" とだけ返答する
+
+応募文（以下をそのまま保存）:
+${lancersJob.proposal}`;
       const task = taskDb.create(userId, instruction);
       taskDb.approve(task.id); // 二度確認なしで即承認
       await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `⚙️ [${lancersId}] ジュニアに指示中...\n応募ページが開いたら貼り付けて送信してください。` }] });
