@@ -9,7 +9,11 @@ const app = express();
 const PORT = process.env.PORT || 3002;
 
 // Lancers ジョブストア（ファイル永続化）
-type LancersJob = { id: string; title: string; url: string; proposal: string; budgetText: string; score: number; scoreLabel: string };
+type LancersJob = {
+  id: string; title: string; url: string; proposal: string;
+  budgetText: string; score: number; scoreLabel: string;
+  reason?: string; platform?: string; autoApply?: boolean;
+};
 const JOBS_FILE = '/tmp/lancers_jobs.json';
 
 function loadJobs(): { jobs: Map<string, LancersJob>; counter: number } {
@@ -68,19 +72,54 @@ app.post('/lancers/job', express.json(), async (req, res) => {
   saveJobs();
 
   const lineUserId = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
-  if (lineUserId) {
-    const card = [
-      `📋 案件承認カード [ID: ${id}]`,
-      `${job.scoreLabel} (${job.score}点)`,
-      ``,
-      `【案件名】${job.title}`,
-      `【予算】${job.budgetText || '不明'}`,
-      `【URL】${job.url}`,
-      ``,
-      `✅ 応募 → "GO ${id}" と返信`,
-      `❌ スキップ → 無視でOK`,
-    ].join('\n');
-    await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: card }] }).catch(console.error);
+
+  if (job.autoApply) {
+    // スコア >= 70: 承認不要で即タスク作成 → agent.ts が自動実行
+    const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
+
+手順:
+1. Bashで実行: node "C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js" "${job.url}" "${(job.proposal || '').replace(/"/g, '\\"').replace(/\n/g, ' ')}"
+2. 実行結果（成功/失敗）を確認する
+3. 成功なら "応募完了 [${id}] ${job.title}" とだけ返答する
+4. 失敗なら エラー内容と "応募失敗 [${id}]" と返答する
+
+※ auto-apply.js は .env の LANCERS_EMAIL と LANCERS_PASSWORD を使います`;
+
+    const task = taskDb.create(lineUserId, instruction);
+    taskDb.approve(task.id);
+
+    if (lineUserId) {
+      const autoCard = [
+        `🤖 自動応募開始 [ID: ${id}]`,
+        `${job.scoreLabel} (${job.score}点)`,
+        job.reason ? `理由: ${job.reason}` : '',
+        ``,
+        `【案件名】${job.title}`,
+        `【予算】${job.budgetText || '不明'}`,
+        `【URL】${job.url}`,
+        ``,
+        `（2〜5分後に応募します。完了したら通知します）`,
+        `❌ キャンセル → "STOP ALL"`,
+      ].filter(Boolean).join('\n');
+      await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: autoCard }] }).catch(console.error);
+    }
+  } else {
+    // スコア 40-69: 承認カード送信
+    if (lineUserId) {
+      const card = [
+        `📋 案件承認カード [ID: ${id}]`,
+        `${job.scoreLabel} (${job.score}点)`,
+        job.reason ? `理由: ${job.reason}` : '',
+        ``,
+        `【案件名】${job.title}`,
+        `【予算】${job.budgetText || '不明'}`,
+        `【URL】${job.url}`,
+        ``,
+        `✅ 応募 → "GO ${id}" と返信`,
+        `❌ スキップ → 無視でOK`,
+      ].filter(Boolean).join('\n');
+      await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: card }] }).catch(console.error);
+    }
   }
 
   res.json({ ok: true, id });
