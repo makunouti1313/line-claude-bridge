@@ -36,13 +36,14 @@ function runClaude(instruction: string): string {
   const env = { ...process.env };
   delete env.CLAUDECODE;
   // stdinで渡す（シェル引数だと改行・特殊文字が壊れるため）
+  // CWDはDesktop（どのプロジェクトへも相対パスで移動できる）
   const output = execSync(
     `claude --print --dangerously-skip-permissions`,
     {
       input: instruction,
-      timeout: 300_000,
+      timeout: 600_000, // 10分（重い作業対応）
       encoding: 'utf8',
-      cwd: 'C:/Users/merucari/OneDrive/デスクトップ/samantha-final',
+      cwd: 'C:/Users/merucari/OneDrive/デスクトップ',
       env,
     }
   );

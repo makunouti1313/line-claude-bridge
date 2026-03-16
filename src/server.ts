@@ -130,61 +130,20 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
       continue;
     }
 
-    // 承認待ちタスクがある場合、自然言語で承認判定
-    const waitingTasks = taskDb.getAwaitingApproval();
-    if (waitingTasks.length > 0) {
-      const intentRes = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          {
-            role: 'system',
-            content: `ユーザーのメッセージが「タスクの承認」を意図しているかを判定してください。
-承認の例: 「承認」「やって」「OK」「いいよ」「お願い」「進めて」「実行して」「やろう」「GO」「はい」「頼む」など。
-返答はJSONのみ: {"approved": true, "taskId": null} または {"approved": false}
-taskIdはメッセージ中に数字があればその数値、なければnull。`,
-          },
-          { role: 'user', content: userText },
-        ],
-        max_tokens: 50,
+    // ゆうすけ本人のメッセージ → 承認不要・即実行
+    const OWNER_ID = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
+    if (userId === OWNER_ID) {
+      const task = taskDb.create(userId, userText);
+      taskDb.approve(task.id);
+      await lineClient.replyMessage({
+        replyToken,
+        messages: [{ type: 'text', text: `⚡ 受信。ジュニアが実行中...\n「${userText.slice(0, 40)}${userText.length > 40 ? '…' : ''}」` }],
       });
-
-      let intent: { approved: boolean; taskId: number | null } = { approved: false, taskId: null };
-      try {
-        const raw = intentRes.choices[0].message.content ?? '{}';
-        intent = JSON.parse(raw.match(/\{.*\}/s)?.[0] ?? '{}');
-      } catch { /* パース失敗は承認なしとみなす */ }
-
-      if (intent.approved) {
-        // IDが指定されていればそのタスク、なければ最新の承認待ちタスク
-        const targetId = intent.taskId ?? waitingTasks[waitingTasks.length - 1].id;
-        const task = taskDb.approve(targetId);
-        const reply = task
-          ? `✅ タスク ${targetId} を承認しました。実行します。`
-          : `⚠️ 承認待ちのタスクが見つかりませんでした。`;
-        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: reply }] });
-        continue;
-      }
+      continue;
     }
 
-    // 通常メッセージ → Groqで指示変換 → 承認カード送信
-    const groqRes = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `あなたはLINEメッセージをClaude Codeへの指示に変換するアシスタントです。
-ユーザーのメッセージを、Claude Codeが実行できる明確な技術指示に変換してください。
-プロジェクトのパス: C:/Users/merucari/OneDrive/デスクトップ/samantha-final/
-返答は指示文のみ。説明不要。`,
-        },
-        { role: 'user', content: userText },
-      ],
-      max_tokens: 500,
-    });
-
-    const instruction = groqRes.choices[0].message.content ?? userText;
-    const task = taskDb.create(userId, instruction);
-
+    // 他のユーザー → 承認カードを送る（セキュリティ維持）
+    const task = taskDb.create(userId, userText);
     await lineClient.replyMessage({
       replyToken,
       messages: [{ type: 'text', text: buildApprovalCard(task) }],
