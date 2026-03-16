@@ -189,6 +189,54 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         continue;
       }
 
+      // ── DELIVER {id} — 納品コンテンツ生成 ──
+      const deliverMatch = userText.match(/^DELIVER\s+(\d+)$/i);
+      if (deliverMatch) {
+        const appId = deliverMatch[1].padStart(3, '0');
+        const instruction = `node "C:/Users/merucari/.claude/scripts/lancers-pipeline/delivery.js" "${appId}" を実行して、結果を報告してください。`;
+        const task = taskDb.create(userId, instruction);
+        taskDb.approve(task.id);
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📝 [${appId}] 納品コンテンツ生成中...\n完了したらプレビューを送ります。` }] });
+        continue;
+      }
+
+      // ── GO_DELIVER {id} — 承認済み納品物を提出 ──
+      const goDeliverMatch = userText.match(/^GO_DELIVER\s+(\d+)$/i);
+      if (goDeliverMatch) {
+        const appId = goDeliverMatch[1].padStart(3, '0');
+        const instruction = `以下を実行してください:
+1. node -e "const l=require('C:/Users/merucari/.claude/scripts/lancers-pipeline/logger.js'); const d=l.getDelivery('${appId}'); console.log(JSON.stringify(d));" を実行してdelivery内容を取得
+2. 取得したcontentをLancersの案件ページ（job_url）のメッセージ欄に送信
+3. 成功したら l.updateDelivery('${appId}', {delivery_status:'delivered'}) を実行
+4. 完了を報告`;
+        const task = taskDb.create(userId, instruction);
+        taskDb.approve(task.id);
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📤 [${appId}] 納品物を送信中...` }] });
+        continue;
+      }
+
+      // ── REPLY {id} — クライアントへ返信 ──
+      const replyMatch = userText.match(/^REPLY\s+(\d+)\s+([\s\S]+)$/i);
+      if (replyMatch) {
+        const appId   = replyMatch[1].padStart(3, '0');
+        const replyText = replyMatch[2].trim();
+        // TODO: Playwright でLancersのメッセージ送信（将来実装）
+        // 今は手動コピペ用にテキストを返す
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📋 返信文 [${appId}]:\n\n${replyText}\n\n（Lancers画面に貼り付けてください）` }] });
+        continue;
+      }
+
+      // ── SHOW_DELIVERY {id} — 納品物全文表示 ──
+      const showDeliveryMatch = userText.match(/^SHOW_DELIVERY\s+(\d+)$/i);
+      if (showDeliveryMatch) {
+        const appId = showDeliveryMatch[1].padStart(3, '0');
+        const instruction = `node -e "const l=require('C:/Users/merucari/.claude/scripts/lancers-pipeline/logger.js'); const d=l.getDelivery('${appId}'); if(d){console.log('【納品物全文】\\n'+d.content);}else{console.log('納品物が見つかりません: ${appId}');}" を実行して結果を報告してください。`;
+        const task = taskDb.create(userId, instruction);
+        taskDb.approve(task.id);
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📄 [${appId}] 全文取得中...` }] });
+        continue;
+      }
+
       // 通常メッセージ → 即実行
       const task = taskDb.create(userId, userText);
       taskDb.approve(task.id);
