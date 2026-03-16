@@ -130,9 +130,27 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
       continue;
     }
 
-    // ゆうすけ本人のメッセージ → 承認不要・即実行
+    // ゆうすけ本人のメッセージ
     const OWNER_ID = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
     if (userId === OWNER_ID) {
+
+      // ── STOP ALL パニックボタン ──
+      if (/^STOP\s*ALL$/i.test(userText)) {
+        const task = taskDb.create(userId, '__STOP_ALL__');
+        taskDb.approve(task.id);
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: '🛑 STOP ALL 指示送信。10秒以内に停止します。' }] });
+        continue;
+      }
+
+      // ── START ALL 再開コマンド ──
+      if (/^START\s*ALL$/i.test(userText)) {
+        const task = taskDb.create(userId, '__START_ALL__');
+        taskDb.approve(task.id);
+        await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: '▶️ START ALL 指示送信。10秒以内に再開します。' }] });
+        continue;
+      }
+
+      // 通常メッセージ → 即実行
       const task = taskDb.create(userId, userText);
       taskDb.approve(task.id);
       await lineClient.replyMessage({

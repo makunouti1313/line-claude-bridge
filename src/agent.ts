@@ -51,7 +51,28 @@ function runClaude(instruction: string): string {
 }
 
 async function processTask(task: Task): Promise<void> {
-  console.log(`[${new Date().toISOString()}] Processing task ${task.id}: ${task.instruction}`);
+  console.log(`[${new Date().toISOString()}] Processing task ${task.id}: ${task.instruction.slice(0, 80)}`);
+
+  // ── ローカルpm2制御コマンド ──
+  if (task.instruction === '__STOP_ALL__') {
+    try {
+      execSync('pm2 stop lancers-pipeline lancers-messenger', { encoding: 'utf8' });
+      await reportResult(task, '✅ 停止完了:\n• lancers-pipeline\n• lancers-messenger\n\nline-agentは継続稼働中。再開: "START ALL"');
+    } catch (e: unknown) {
+      await reportResult(task, `⚠️ 停止エラー: ${(e as Error).message?.slice(0, 100)}`, true);
+    }
+    return;
+  }
+
+  if (task.instruction === '__START_ALL__') {
+    try {
+      execSync('pm2 start lancers-pipeline lancers-messenger', { encoding: 'utf8' });
+      await reportResult(task, '▶️ 再開完了:\n• lancers-pipeline\n• lancers-messenger');
+    } catch (e: unknown) {
+      await reportResult(task, `⚠️ 再開エラー: ${(e as Error).message?.slice(0, 100)}`, true);
+    }
+    return;
+  }
 
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -77,6 +98,7 @@ let isProcessing = false;
 async function poll(): Promise<void> {
   if (isProcessing) return;
   try {
+    await wakeRender(); // スリープ回避：poll前に必ず起こす
     const tasks = await fetchApprovedTasks();
     if (tasks.length === 0) return;
     isProcessing = true;
@@ -92,6 +114,17 @@ async function poll(): Promise<void> {
 
 async function keepAlive(): Promise<void> {
   try { await fetch(`${SERVER_URL}/health`); } catch { /* ignore */ }
+}
+
+/** poll前にRenderを起こす。スリープ中なら起動完了まで最大30秒待つ */
+async function wakeRender(): Promise<void> {
+  for (let i = 0; i < 6; i++) {
+    try {
+      const res = await fetch(`${SERVER_URL}/health`, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) return; // 起動済み
+    } catch { /* 起動中 */ }
+    await new Promise(r => setTimeout(r, 5000));
+  }
 }
 
 // 毎日8:00 JST (23:00 UTC) にブリーフィング
