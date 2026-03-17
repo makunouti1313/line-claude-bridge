@@ -284,10 +284,18 @@ app.post('/tasks/:id/complete', (req, res) => {
       ? `❌ タスク ${id} でエラーが発生しました。\n${error}`
       : `✅ タスク ${id} が完了しました。\n\n${result}`;
 
-    lineClient.pushMessage({
-      to: line_user_id,
-      messages: [{ type: 'text', text: message }],
-    }).catch(console.error);
+    // 失敗時は最大3回リトライ（3s, 6s間隔）
+    (async () => {
+      for (let i = 0; i < 3; i++) {
+        try {
+          await lineClient.pushMessage({ to: line_user_id, messages: [{ type: 'text', text: message }] });
+          return;
+        } catch (e) {
+          if (i < 2) await new Promise(r => setTimeout(r, 3000 * (i + 1)));
+          else console.error('LINE push 3回失敗:', (e as Error).message);
+        }
+      }
+    })();
   }
 
   res.json({ ok: true });
