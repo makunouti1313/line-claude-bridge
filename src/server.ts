@@ -35,6 +35,20 @@ function saveJobs(): void {
 const { jobs: lancersJobs, counter: lancersJobCounter0 } = loadJobs();
 let lancersJobCounter = lancersJobCounter0;
 
+// ─── デジタル商品提案ストア ──────────────────────────────────────────────
+type ProductProposal = {
+  index: number;
+  title: string;
+  price: number;
+  salesSite: string;
+  salesUrl: string;
+  productType: 'notion_template' | 'prompt_pack' | 'pdf_guide';
+  niche: string;
+  creationTime: string;
+  description?: string;
+};
+let todayProposals: { date: string; proposals: ProductProposal[] } | null = null;
+
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
   channelSecret: process.env.LINE_CHANNEL_SECRET!,
@@ -64,6 +78,68 @@ async function processDiscordQueue(): Promise<void> {
     if (discordQueue.length > 0) await new Promise(r => setTimeout(r, 500)); // 2req/秒
   }
   discordQueueRunning = false;
+}
+
+/** 長文を Discord の 2000 文字制限に合わせて分割（段落境界優先） */
+function splitToChunks(text: string, maxLen = 1900): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let splitAt = remaining.lastIndexOf('\n\n', maxLen);
+    if (splitAt < 400) splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt < 400) splitAt = maxLen;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+/** Groq で商品コンテンツを生成（販売ページ掲載文 + 商品本体） */
+async function generateProductContent(proposal: ProductProposal): Promise<string> {
+  const typePrompts: Record<string, string> = {
+    notion_template: `商品「${proposal.title}」（¥${proposal.price.toLocaleString()}）
+
+以下の2セクションを生成してください:
+
+**【BOOTHの販売ページ掲載文】**（コピペ用・300〜400文字・商品の魅力と使い方を具体的に）
+
+---
+
+**【Notionテンプレート本体】**（Markdownで記述・データベース列名・プロパティ・セクション構造を詳細に・コピーしてNotionに貼り付けられる形式）`,
+
+    prompt_pack: `商品「${proposal.title}」（¥${proposal.price.toLocaleString()}）
+
+以下の2セクションを生成してください:
+
+**【BOOTHの販売ページ掲載文】**（コピペ用・300〜400文字・何が入っているか具体的に）
+
+---
+
+**【プロンプト本体（テキストファイル用）】**（番号付き・30〜50個・各プロンプトは実際に使えるレベルで具体的に・カテゴリ分け）`,
+
+    pdf_guide: `商品「${proposal.title}」（¥${proposal.price.toLocaleString()}）
+
+以下を生成してください:
+
+**【note記事本文】**（Markdown形式・1500〜2000文字・## 見出し使用・具体的で実践的・「させていただきます」などのAI表現禁止）`,
+  };
+
+  const prompt = typePrompts[proposal.productType] || typePrompts.pdf_guide;
+  const res = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    messages: [
+      {
+        role: 'system',
+        content: '実力派の日本語コンテンツライター。即販売できる品質のコンテンツのみ生成する。「させていただきます」「ぜひ」「重要性」などのAI的表現は使わない。具体的・実践的に。',
+      },
+      { role: 'user', content: prompt },
+    ],
+    max_tokens: 2500,
+    temperature: 0.7,
+  });
+  return res.choices[0].message.content ?? '';
 }
 
 /** Discord webhook に直接送信（失敗時は3回リトライ・指数バックオフ） */
@@ -322,6 +398,16 @@ app.post('/notify', async (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
+// agent.ts の9AM提案生成から呼ばれる
+app.post('/proposals/save', express.json(), (req, res) => {
+  if (req.headers['x-api-key'] !== process.env.AGENT_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  todayProposals = req.body as { date: string; proposals: ProductProposal[] };
+  console.log(`[${new Date().toISOString()}] Proposals saved: ${todayProposals.proposals.length}件`);
+  res.json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
@@ -349,13 +435,41 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       await msg.reply(text.slice(0, 2000)).catch(console.error);
     };
 
-    // GO [ID] — ドラフト生成（提出は人間が手動）
+    // GO [番号] — 商品提案生成 OR Lancers案件
     const goMatch = userText.match(/^GO\s+(\d+)$/i);
     if (goMatch) {
+      const num = Number(goMatch[1]);
+
+      // ── 商品提案 GO（1〜9 かつ今日の提案あり） ──
+      if (num >= 1 && num <= 9 && todayProposals?.proposals?.[num - 1]) {
+        const proposal = todayProposals.proposals[num - 1];
+        await reply(`⚙️ 「${proposal.title}」を生成中...\nしばらくお待ちください。`);
+
+        generateProductContent(proposal)
+          .then(async (content) => {
+            const salesUrl = proposal.salesUrl || (proposal.productType === 'pdf_guide' ? 'https://note.com/' : 'https://booth.pm/');
+            // メッセージ1: URL（コピペ用）
+            enqueueDiscord(
+              `📦 **${proposal.title}** 完成\n\n🔗 **販売先URL（コピペ）:**\n${salesUrl}\n\n価格: ¥${proposal.price.toLocaleString()} | ${proposal.salesSite}`
+            );
+            // メッセージ2〜: コンテンツ本体（コピペ用・長い場合は複数に分割）
+            const chunks = splitToChunks(content);
+            for (const chunk of chunks) {
+              await new Promise(r => setTimeout(r, 700));
+              enqueueDiscord(chunk);
+            }
+          })
+          .catch((e: Error) => {
+            enqueueDiscord(`❌ 生成失敗 [${num}]: ${e.message.slice(0, 100)}`);
+          });
+        return;
+      }
+
+      // ── Lancers案件 GO ──
       const lancersId = goMatch[1].padStart(3, '0');
       const lancersJob = lancersJobs.get(lancersId);
       if (!lancersJob) {
-        await reply(`❌ ID: ${lancersId} の案件が見つかりません。`);
+        await reply(`❌ ID: ${goMatch[1]} が見つかりません。\n商品提案は当日のみ有効（GO 1〜5）。案件は再起動でリセット。`);
         return;
       }
       const task = taskDb.create(userId, buildAutoApplyInstruction(lancersId, lancersJob));
