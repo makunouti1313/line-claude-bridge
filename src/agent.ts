@@ -247,8 +247,82 @@ function readNightlyBatchSummary(): { generated: number; errors: number; titles:
   } catch { return null; }
 }
 
-// 毎日8:00 JST (23:00 UTC) にブリーフィング
+// ─── デジタル商品の毎朝提案（9:00 JST） ──────────────────────────────────
+
+type ProductProposal = {
+  index: number;
+  title: string;
+  price: number;
+  salesSite: string;
+  salesUrl: string;
+  productType: 'notion_template' | 'prompt_pack' | 'pdf_guide';
+  niche: string;
+  creationTime: string;
+  description?: string;
+};
+
+async function generateAndSendProposals(): Promise<void> {
+  try {
+    const { default: Groq } = await import('groq-sdk');
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const today = new Date().toLocaleDateString('sv', { timeZone: 'Asia/Tokyo' });
+
+    const res = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: '日本のデジタル商品市場の専門家。JSONのみで返答する。余計な説明・コードブロック記号は不要。' },
+        {
+          role: 'user',
+          content: '今日(' + today + ')のデジタル商品提案を5件生成。優先ニッチ: 確定申告/経費管理Notion / 請求書インボイス / フリーランスWorkflow / AIプロンプトパック / 麻雀コンテンツ\n\n以下のJSON配列のみ返答（コードブロックなし）:\n[{"index":1,"title":"タイトル","price":1480,"salesSite":"BOOTH","salesUrl":"https://booth.pm/","productType":"notion_template","niche":"accounting","creationTime":"45分","description":"一言説明"}]\n\nproductTypeは notion_template/prompt_pack/pdf_guide。価格980〜2980円。作成時間1時間以内。note向けはsalesUrl="https://note.com/"。',
+        },
+      ],
+      max_tokens: 900,
+      temperature: 0.5,
+    });
+
+    const raw = res.choices[0].message.content ?? '[]';
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.error('[Proposals] JSONが取得できませんでした:', raw.slice(0, 200));
+      return;
+    }
+    const proposals: ProductProposal[] = JSON.parse(jsonMatch[0]);
+
+    // server.ts に保存（GO ハンドラーで参照するため）
+    await fetch(`${SERVER_URL}/proposals/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': AGENT_API_KEY },
+      body: JSON.stringify({ date: today, proposals }),
+    }).catch((e: Error) => console.error('[Proposals] save失敗:', e.message));
+
+    // Discord に提案リスト送信
+    const discordUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (!discordUrl) return;
+
+    const lines = [
+      `📊 **今日の商品提案** (${today})`,
+      '',
+      ...proposals.map((p, i) =>
+        `**${i + 1}. ${p.title}**\n¥${p.price.toLocaleString()} | ${p.salesSite} | ⏱${p.creationTime}\n${p.description ?? ''}`
+      ),
+      '',
+      '> **GO [番号]** で生成 → URL + コンテンツをコピペ用で送ります（例: GO 1）',
+    ];
+
+    await fetch(discordUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: lines.join('\n').slice(0, 2000) }),
+    });
+    console.log(`[${new Date().toISOString()}] Daily proposals sent: ${proposals.length}件`);
+  } catch (err) {
+    console.error('[Proposals] 生成エラー:', err);
+  }
+}
+
+// 毎日8:00 JST (23:00 UTC) にブリーフィング、9:00 JST に商品提案
 let lastBriefingDate = '';
+let lastProposalDate = '';
 async function checkDailyBriefing(): Promise<void> {
   const now = new Date();
   const jstHour = (now.getUTCHours() + 9) % 24;
@@ -256,6 +330,10 @@ async function checkDailyBriefing(): Promise<void> {
   if (jstHour === 8 && lastBriefingDate !== today) {
     lastBriefingDate = today;
     await sendDailyBriefing();
+  }
+  if (jstHour === 9 && lastProposalDate !== today) {
+    lastProposalDate = today;
+    await generateAndSendProposals();
   }
 }
 
