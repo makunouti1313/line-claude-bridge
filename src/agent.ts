@@ -267,28 +267,16 @@ async function sendDailyBriefing(): Promise<void> {
     const { default: Groq } = await import('groq-sdk');
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-    // Lancers案件パイプラインを実行して今日の状況を把握
-    let lancersContext = '';
-    try {
-      const pipelineResult = runClaude(
-        'C:/Users/merucari/.openclaw/workspace/ping-test/jobs.json を読んで、今日の日付（created_at）のpending案件数と最高スコア案件のタイトル・スコアを1行で要約してください。ファイルがなければ「案件データなし」と返してください。'
-      );
-      lancersContext = pipelineResult;
-    } catch {
-      lancersContext = '案件データ未取得';
-    }
-
     const res = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
           role: 'system',
-          content: `あなたはジュニア。ゆうすけ（28歳、雀荘スタッフ週3、月収10万、副業でランサーズ月20万目標）の相棒AI。
-毎朝自主的に状況報告と提案を送る。タメ口。お世辞なし。具体的に。150字以内。`,
+          content: `あなたはジュニア。ゆうすけ（28歳、雀荘スタッフ週3、月収10万、Gumroadでデジタル商品販売中）の相棒AI。毎朝自主的に状況報告と提案を送る。タメ口。お世辞なし。具体的に。150字以内。`,
         },
         {
           role: 'user',
-          content: `今日の朝のメッセージを作って。Lancers状況: ${lancersContext}。今日やるべき最重要アクション1つを明確に。`,
+          content: `今日の朝のメッセージを作って。デジタル商品販売フェーズ。今日やるべき最重要アクション1つを明確に。`,
         },
       ],
       max_tokens: 200,
