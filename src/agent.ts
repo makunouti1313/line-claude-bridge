@@ -32,22 +32,30 @@ async function reportResult(task: Task, result: string, isError = false): Promis
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const costMonitor = require('C:/Users/merucari/.openclaw/workspace/ping-test/modules/cost-monitor');
+
 function runClaude(instruction: string): string {
+  // コスト一時停止中はスキップ
+  if (costMonitor.isPaused()) {
+    throw new Error('APIコスト上限($50)に達したため一時停止中。Discordで "RESUME COST" を送信してください。');
+  }
   const env = { ...process.env };
   delete env.CLAUDECODE;
-  // stdinで渡す（シェル引数だと改行・特殊文字が壊れるため）
-  // CWDはDesktop（どのプロジェクトへも相対パスで移動できる）
   const output = execSync(
     `claude --print --dangerously-skip-permissions`,
     {
       input: instruction,
-      timeout: 600_000, // 10分（重い作業対応）
+      timeout: 600_000,
       encoding: 'utf8',
       cwd: 'C:/Users/merucari/OneDrive/デスクトップ',
       env,
     }
   );
-  return output.trim();
+  const result = output.trim();
+  // コスト追跡（非同期・失敗しても処理は止めない）
+  costMonitor.track(instruction, result, `task`).catch(() => {});
+  return result;
 }
 
 async function processTask(task: Task): Promise<void> {
@@ -71,6 +79,26 @@ async function processTask(task: Task): Promise<void> {
     } catch (e: unknown) {
       await reportResult(task, `⚠️ 再開エラー: ${(e as Error).message?.slice(0, 100)}`, true);
     }
+    return;
+  }
+
+  // ── コスト管理コマンド ──
+  if (task.instruction === '__RESUME_COST__') {
+    await costMonitor.resume();
+    await reportResult(task, '▶️ APIコスト制限を解除しました。');
+    return;
+  }
+
+  if (task.instruction === '__COST_STATUS__') {
+    const s = costMonitor.getSummary();
+    const msg = [
+      `💰 APIコスト状況 (${s.monthKey})`,
+      `使用額: $${s.totalCostUSD.toFixed(3)}`,
+      `呼び出し回数: ${s.callCount}回`,
+      `残り余裕: $${s.remaining.toFixed(2)} ($50まで)`,
+      s.isPaused ? '🛑 現在一時停止中' : '✅ 稼働中',
+    ].join('\n');
+    await reportResult(task, msg);
     return;
   }
 

@@ -369,6 +369,24 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       return;
     }
 
+    // RESUME COST — コスト一時停止を解除
+    if (/^RESUME\s*COST$/i.test(userText)) {
+      const instruction = '__RESUME_COST__';
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply('▶️ コスト制限解除を指示しました。');
+      return;
+    }
+
+    // COST — 現在のコスト状況を確認
+    if (/^COST$/i.test(userText)) {
+      const instruction = '__COST_STATUS__';
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply('💰 コスト状況を確認中...');
+      return;
+    }
+
     // STOP ALL
     if (/^STOP\s*ALL$/i.test(userText)) {
       const task = taskDb.create(userId, '__STOP_ALL__');
