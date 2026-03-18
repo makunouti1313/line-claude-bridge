@@ -45,6 +45,26 @@ const lineClient = new messagingApi.MessagingApiClient({
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+/** Discord webhook に送信（失敗時は3回リトライ） */
+async function sendDiscord(content: string): Promise<void> {
+  const url = process.env.DISCORD_WEBHOOK_URL;
+  if (!url) return;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: content.slice(0, 2000) }),
+      });
+      if (res.ok || res.status === 204) return;
+      throw new Error(`Discord HTTP ${res.status}`);
+    } catch (e) {
+      if (i < 2) await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      else console.error('Discord送信失敗:', (e as Error).message);
+    }
+  }
+}
+
 function buildApprovalCard(task: { id: number; instruction: string }): string {
   return [
     `🔐 承認カード`,
@@ -92,38 +112,34 @@ node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/p
     const task = taskDb.create(lineUserId, instruction);
     taskDb.approve(task.id);
 
-    if (lineUserId) {
-      const autoCard = [
-        `🤖 自動応募開始 [ID: ${id}]`,
-        `${job.scoreLabel} (${job.score}点)`,
-        job.reason ? `理由: ${job.reason}` : '',
-        ``,
-        `【案件名】${job.title}`,
-        `【予算】${job.budgetText || '不明'}`,
-        `【URL】${job.url}`,
-        ``,
-        `（2〜5分後に応募します。完了したら通知します）`,
-        `❌ キャンセル → "STOP ALL"`,
-      ].filter(Boolean).join('\n');
-      await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: autoCard }] }).catch(console.error);
-    }
+    const autoCard = [
+      `🤖 自動応募開始 [ID: ${id}]`,
+      `${job.scoreLabel} (${job.score}点)`,
+      job.reason ? `理由: ${job.reason}` : '',
+      ``,
+      `【案件名】${job.title}`,
+      `【予算】${job.budgetText || '不明'}`,
+      `【URL】${job.url}`,
+      ``,
+      `（2〜5分後に応募します。完了したら通知します）`,
+      `❌ キャンセル → LINEで "STOP ALL"`,
+    ].filter(Boolean).join('\n');
+    await sendDiscord(autoCard);
   } else {
-    // スコア 40-69: 承認カード送信
-    if (lineUserId) {
-      const card = [
-        `📋 案件承認カード [ID: ${id}]`,
-        `${job.scoreLabel} (${job.score}点)`,
-        job.reason ? `理由: ${job.reason}` : '',
-        ``,
-        `【案件名】${job.title}`,
-        `【予算】${job.budgetText || '不明'}`,
-        `【URL】${job.url}`,
-        ``,
-        `✅ 応募 → "GO ${id}" と返信`,
-        `❌ スキップ → 無視でOK`,
-      ].filter(Boolean).join('\n');
-      await lineClient.pushMessage({ to: lineUserId, messages: [{ type: 'text', text: card }] }).catch(console.error);
-    }
+    // 承認カード送信
+    const card = [
+      `📋 案件承認カード [ID: ${id}]`,
+      `${job.scoreLabel} (${job.score}点)`,
+      job.reason ? `理由: ${job.reason}` : '',
+      ``,
+      `【案件名】${job.title}`,
+      `【予算】${job.budgetText || '不明'}`,
+      `【URL】${job.url}`,
+      ``,
+      `✅ 応募 → LINEで "GO ${id}" と送信`,
+      `❌ スキップ → 無視でOK`,
+    ].filter(Boolean).join('\n');
+    await sendDiscord(card);
   }
 
   res.json({ ok: true, id });
@@ -291,19 +307,7 @@ app.post('/tasks/:id/complete', (req, res) => {
     const message = error
       ? `❌ タスク ${id} でエラーが発生しました。\n${error}`
       : `✅ タスク ${id} が完了しました。\n\n${result}`;
-
-    // 失敗時は最大3回リトライ（3s, 6s間隔）
-    (async () => {
-      for (let i = 0; i < 3; i++) {
-        try {
-          await lineClient.pushMessage({ to: line_user_id, messages: [{ type: 'text', text: message }] });
-          return;
-        } catch (e) {
-          if (i < 2) await new Promise(r => setTimeout(r, 3000 * (i + 1)));
-          else console.error('LINE push 3回失敗:', (e as Error).message);
-        }
-      }
-    })();
+    sendDiscord(message).catch(console.error);
   }
 
   res.json({ ok: true });

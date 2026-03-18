@@ -184,11 +184,20 @@ async function sendDailyBriefing(): Promise<void> {
     const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
     const message = `☀️ ${now} ジュニアだ。\n\n${briefing}`;
 
-    await fetch(`${SERVER_URL}/notify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': AGENT_API_KEY },
-      body: JSON.stringify({ to: lineUserId, message }),
-    });
+    const discordUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (discordUrl) {
+      await fetch(discordUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message }),
+      });
+    } else {
+      await fetch(`${SERVER_URL}/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': AGENT_API_KEY },
+        body: JSON.stringify({ to: lineUserId, message }),
+      });
+    }
     console.log(`[${new Date().toISOString()}] Daily briefing sent`);
   } catch (err) {
     console.error('Briefing error:', err);
