@@ -46,7 +46,27 @@ const lineClient = new messagingApi.MessagingApiClient({
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-/** Discord webhook に送信（失敗時は3回リトライ） */
+// ─── Discord 送信キュー（レート制限対応・500+件バースト対応） ─────────────
+// Discord webhook: 安全レートは 2req/秒（超えると429、30分BANのリスクあり）
+const discordQueue: string[] = [];
+let discordQueueRunning = false;
+
+function enqueueDiscord(content: string): void {
+  discordQueue.push(content.slice(0, 2000));
+  if (!discordQueueRunning) processDiscordQueue();
+}
+
+async function processDiscordQueue(): Promise<void> {
+  discordQueueRunning = true;
+  while (discordQueue.length > 0) {
+    const content = discordQueue.shift()!;
+    await sendDiscord(content);
+    if (discordQueue.length > 0) await new Promise(r => setTimeout(r, 500)); // 2req/秒
+  }
+  discordQueueRunning = false;
+}
+
+/** Discord webhook に直接送信（失敗時は3回リトライ・指数バックオフ） */
 async function sendDiscord(content: string): Promise<void> {
   const url = process.env.DISCORD_WEBHOOK_URL;
   if (!url) return;
@@ -55,12 +75,18 @@ async function sendDiscord(content: string): Promise<void> {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: content.slice(0, 2000) }),
+        body: JSON.stringify({ content }),
+        signal: AbortSignal.timeout(10_000),
       });
       if (res.ok || res.status === 204) return;
+      if (res.status === 429) {
+        const retryAfter = Number(res.headers.get('retry-after') || '2') * 1000;
+        await new Promise(r => setTimeout(r, retryAfter));
+        continue;
+      }
       throw new Error(`Discord HTTP ${res.status}`);
     } catch (e) {
-      if (i < 2) await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      if (i < 2) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
       else console.error('Discord送信失敗:', (e as Error).message);
     }
   }
@@ -125,7 +151,7 @@ node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/p
       `（2〜5分後に応募します。完了したら通知します）`,
       `❌ キャンセル → LINEで "STOP ALL"`,
     ].filter(Boolean).join('\n');
-    await sendDiscord(autoCard);
+    enqueueDiscord(autoCard);
   } else {
     // 承認カード送信
     const card = [
@@ -137,10 +163,10 @@ node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/p
       `【予算】${job.budgetText || '不明'}`,
       `【URL】${job.url}`,
       ``,
-      `✅ 応募 → LINEで "GO ${id}" と送信`,
+      `✅ 応募 → "GO ${id}" と送信`,
       `❌ スキップ → 無視でOK`,
     ].filter(Boolean).join('\n');
-    await sendDiscord(card);
+    enqueueDiscord(card);
   }
 
   res.json({ ok: true, id });
@@ -308,19 +334,19 @@ app.post('/tasks/:id/complete', (req, res) => {
     const message = error
       ? `❌ タスク ${id} でエラーが発生しました。\n${error}`
       : `✅ タスク ${id} が完了しました。\n\n${result}`;
-    sendDiscord(message).catch(console.error);
+    enqueueDiscord(message);
   }
 
   res.json({ ok: true });
 });
 
-// エージェントからのプッシュ通知代理送信
+// エージェントからのプッシュ通知代理送信（Discord優先、フォールバックなし）
 app.post('/notify', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.AGENT_API_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const { to, message } = req.body as { to: string; message: string };
-  await lineClient.pushMessage({ to, messages: [{ type: 'text', text: message }] });
+  const { message } = req.body as { to?: string; message: string };
+  enqueueDiscord(message);
   res.json({ ok: true });
 });
 
