@@ -405,6 +405,37 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       return;
     }
 
+    // START [テーマ] — eBook生成
+    const startMatch = userText.match(/^START\s+(.+)$/i);
+    if (startMatch) {
+      const theme = startMatch[1].trim();
+      const instruction = `__PRODUCT__:${theme}`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply(`📚 **"${theme}"** の生成を開始します。\n5〜10分後にドラフトをお届けします。`);
+      return;
+    }
+
+    // OK [draftId] — ドラフト承認（feedback-logに記録）
+    const okMatch = userText.match(/^OK\s+(\d+)$/i);
+    if (okMatch) {
+      const instruction = `__PRODUCT_FEEDBACK__:${okMatch[1]}:OK`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply(`✅ ドラフト [${okMatch[1]}] を承認しました。記録します。`);
+      return;
+    }
+
+    // NG [draftId] [理由] — ドラフト非承認
+    const ngMatch = userText.match(/^NG\s+(\d+)\s+(.+)$/i);
+    if (ngMatch) {
+      const instruction = `__PRODUCT_FEEDBACK__:${ngMatch[1]}:${ngMatch[2]}`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply(`📝 フィードバック記録: "${ngMatch[2]}"\n次回の生成に反映します。`);
+      return;
+    }
+
     // 通常メッセージ → 即実行
     const task = taskDb.create(userId, userText);
     taskDb.approve(task.id);

@@ -74,6 +74,44 @@ async function processTask(task: Task): Promise<void> {
     return;
   }
 
+  // ── eBook生成 ──
+  if (task.instruction.startsWith('__PRODUCT__:')) {
+    const theme = task.instruction.slice('__PRODUCT__:'.length);
+    try {
+      const result = execSync(
+        `node "C:/Users/merucari/.openclaw/workspace/ping-test/modules/generator.js" `,
+        {
+          input: theme,
+          timeout: 600_000,
+          encoding: 'utf8',
+          cwd: 'C:/Users/merucari/.openclaw/workspace/ping-test',
+          env: { ...process.env },
+        }
+      );
+      await reportResult(task, result.trim() || `✅ "${theme}" のドラフト生成完了`);
+    } catch (e: unknown) {
+      const err = e as { stdout?: string; stderr?: string; message?: string };
+      await reportResult(task, err.stdout || err.stderr || err.message || '生成失敗', true);
+    }
+    return;
+  }
+
+  // ── フィードバック記録 ──
+  if (task.instruction.startsWith('__PRODUCT_FEEDBACK__:')) {
+    const [, draftId, ...rest] = task.instruction.split(':');
+    const feedback = rest.join(':');
+    try {
+      execSync(
+        `node -e "require('dotenv').config(); const f=require('./modules/feedback-log'); f.recordFeedback('${draftId}','${feedback.replace(/'/g, "\\'")}'); console.log('記録完了');"`,
+        { encoding: 'utf8', cwd: 'C:/Users/merucari/.openclaw/workspace/ping-test', env: { ...process.env } }
+      );
+      await reportResult(task, `✅ フィードバック記録: [${draftId}] "${feedback}"`);
+    } catch (e: unknown) {
+      await reportResult(task, `記録失敗: ${(e as Error).message?.slice(0, 100)}`, true);
+    }
+    return;
+  }
+
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
