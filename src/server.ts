@@ -423,6 +423,22 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       return;
     }
 
+    // APPROVE [n] / REJECT [n] — 改善提案の承認・却下
+    const approveMatch = userText.match(/^APPROVE\s+(\d+)$/i);
+    if (approveMatch) {
+      const task = taskDb.create(userId, `__IMPROVE_APPROVE__:${approveMatch[1]}`);
+      taskDb.approve(task.id);
+      await reply(`✅ 改善提案 ${approveMatch[1]} の承認を処理中...`);
+      return;
+    }
+    const rejectMatch = userText.match(/^REJECT\s+(\d+)$/i);
+    if (rejectMatch) {
+      const task = taskDb.create(userId, `__IMPROVE_REJECT__:${rejectMatch[1]}`);
+      taskDb.approve(task.id);
+      await reply(`❌ 改善提案 ${rejectMatch[1]} を却下します。`);
+      return;
+    }
+
     // SUBMIT [draftId] — Gumroad投稿用テキスト出力
     const submitMatch = userText.match(/^SUBMIT\s+(\d+)$/i);
     if (submitMatch) {

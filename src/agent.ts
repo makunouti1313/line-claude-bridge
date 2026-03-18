@@ -82,6 +82,22 @@ async function processTask(task: Task): Promise<void> {
     return;
   }
 
+  // ── 改善提案 承認 / 却下 ──
+  if (task.instruction.startsWith('__IMPROVE_APPROVE__:') || task.instruction.startsWith('__IMPROVE_REJECT__:')) {
+    const [prefix, index] = task.instruction.split(':');
+    const isApprove = prefix === '__IMPROVE_APPROVE__';
+    try {
+      const si = require('C:/Users/merucari/.openclaw/workspace/ping-test/modules/self-improvement');
+      const result = isApprove
+        ? await si.approveImprovement(index)
+        : await si.rejectImprovement(index);
+      await reportResult(task, result);
+    } catch (e: unknown) {
+      await reportResult(task, `処理失敗: ${(e as Error).message?.slice(0, 100)}`, true);
+    }
+    return;
+  }
+
   // ── Gumroad投稿テキスト出力 ──
   if (task.instruction.startsWith('__PRODUCT_SUBMIT__:')) {
     const draftId = task.instruction.split(':')[1];
