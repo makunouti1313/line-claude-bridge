@@ -92,6 +92,29 @@ async function sendDiscord(content: string): Promise<void> {
   }
 }
 
+/** ドラフト生成指示（auto-apply.js は使わない・提出は人間が手動） */
+function buildDraftInstruction(id: string, job: LancersJob): string {
+  return `以下のLancers案件の応募文ドラフトを生成してローカルに保存してください。
+
+案件ID: ${id}
+タイトル: ${job.title}
+URL: ${job.url}
+予算: ${job.budgetText || '不明'}
+スコア: ${job.score}点
+${job.reason ? `選定理由: ${job.reason}` : ''}
+
+既存の提案文（ベースとして使用）:
+${job.proposal || '（未生成）'}
+
+手順:
+1. node -e "require('fs').mkdirSync('C:/Users/merucari/.claude/scripts/lancers-pipeline/drafts',{recursive:true});" を実行
+2. 上記案件に合わせた高品質な応募文ドラフトを作成する（800〜1200文字、具体的・読み手が一目で採用したくなる内容）
+3. ドラフトをMarkdown形式で C:/Users/merucari/.claude/scripts/lancers-pipeline/drafts/${id}.md に保存する
+4. "ドラフト完了 [${id}] ${job.title}" とだけ返答する
+
+絶対禁止: auto-apply.js の実行・ブラウザ操作・応募ボタンのクリック。提出は人間が手動で行う。`;
+}
+
 function buildApprovalCard(task: { id: number; instruction: string }): string {
   return [
     `🔐 承認カード`,
@@ -120,54 +143,20 @@ app.post('/lancers/job', express.json(), async (req, res) => {
 
   const lineUserId = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
 
-  if (job.autoApply) {
-    // スコア >= 70: 承認不要で即タスク作成 → agent.ts が自動実行
-    // proposalをbase64でエンコードして渡す（Windows CLIの日本語文字化け対策）
-    const proposalB64 = Buffer.from(job.proposal || '', 'utf8').toString('base64');
-    const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
-
-手順:
-1. Bashで以下を実行してproposalファイルを作成:
-node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${id}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
-2. Bashで以下を実行して応募:
-node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${id}.txt','utf8'); applyToJob('${job.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
-3. 成功なら "応募完了 [${id}] ${job.title}" とだけ返答する
-4. 失敗なら エラー内容と "応募失敗 [${id}]" と返答する
-
-※ auto-apply.js は .env の LANCERS_EMAIL と LANCERS_PASSWORD を使います`;
-
-    const task = taskDb.create(lineUserId, instruction);
-    taskDb.approve(task.id);
-
-    const autoCard = [
-      `🤖 自動応募開始 [ID: ${id}]`,
-      `${job.scoreLabel} (${job.score}点)`,
-      job.reason ? `理由: ${job.reason}` : '',
-      ``,
-      `【案件名】${job.title}`,
-      `【予算】${job.budgetText || '不明'}`,
-      `【URL】${job.url}`,
-      ``,
-      `（2〜5分後に応募します。完了したら通知します）`,
-      `❌ キャンセル → LINEで "STOP ALL"`,
-    ].filter(Boolean).join('\n');
-    enqueueDiscord(autoCard);
-  } else {
-    // 承認カード送信
-    const card = [
-      `📋 案件承認カード [ID: ${id}]`,
-      `${job.scoreLabel} (${job.score}点)`,
-      job.reason ? `理由: ${job.reason}` : '',
-      ``,
-      `【案件名】${job.title}`,
-      `【予算】${job.budgetText || '不明'}`,
-      `【URL】${job.url}`,
-      ``,
-      `✅ 応募 → "GO ${id}" と送信`,
-      `❌ スキップ → 無視でOK`,
-    ].filter(Boolean).join('\n');
-    enqueueDiscord(card);
-  }
+  // 全案件: 承認カード送信（auto-submitは禁止。提出は人間が手動で行う）
+  const card = [
+    `📋 案件カード [ID: ${id}]`,
+    `${job.scoreLabel} (${job.score}点)`,
+    job.reason ? `理由: ${job.reason}` : '',
+    ``,
+    `【案件名】${job.title}`,
+    `【予算】${job.budgetText || '不明'}`,
+    `【URL】${job.url}`,
+    ``,
+    `✅ ドラフト生成 → "GO ${id}"`,
+    `❌ スキップ → 無視でOK`,
+  ].filter(Boolean).join('\n');
+  enqueueDiscord(card);
 
   res.json({ ok: true, id });
 });
@@ -200,23 +189,9 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `❌ ID: ${lancersId} の案件が見つかりません。\n案件は再起動でリセットされます。` }] });
         continue;
       }
-      // ジュニアへの指示を作成して即承認 → agent.tsが5秒以内に実行
-      // proposalをbase64でエンコードして渡す（Windows CLIの日本語文字化け対策）
-      const proposalB64 = Buffer.from(lancersJob.proposal || '', 'utf8').toString('base64');
-      const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
-
-手順:
-1. Bashで以下を実行してproposalファイルを作成:
-node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${lancersId}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
-2. Bashで以下を実行して応募:
-node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${lancersId}.txt','utf8'); applyToJob('${lancersJob.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
-3. 成功なら "応募完了 [${lancersId}] ${lancersJob.title}" とだけ返答する
-4. 失敗なら エラー内容と "応募失敗 [${lancersId}]" と返答する
-
-※ auto-apply.jsは .env の LANCERS_EMAIL と LANCERS_PASSWORD を使ってログインして自動送信します`;
-      const task = taskDb.create(userId, instruction);
-      taskDb.approve(task.id); // 二度確認なしで即承認
-      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `⚙️ [${lancersId}] ジュニアに指示中...\n応募ページが開いたら貼り付けて送信してください。` }] });
+      const task = taskDb.create(userId, buildDraftInstruction(lancersId, lancersJob));
+      taskDb.approve(task.id);
+      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📝 [${lancersId}] ドラフト生成中...完了したらDiscordに通知します。` }] });
       continue;
     }
 
@@ -379,7 +354,7 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       await msg.reply(text.slice(0, 2000)).catch(console.error);
     };
 
-    // GO [ID] — Lancers案件を即実行
+    // GO [ID] — ドラフト生成（提出は人間が手動）
     const goMatch = userText.match(/^GO\s+(\d+)$/i);
     if (goMatch) {
       const lancersId = goMatch[1].padStart(3, '0');
@@ -388,21 +363,9 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
         await reply(`❌ ID: ${lancersId} の案件が見つかりません。`);
         return;
       }
-      const proposalB64 = Buffer.from(lancersJob.proposal || '', 'utf8').toString('base64');
-      const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
-
-手順:
-1. Bashで以下を実行してproposalファイルを作成:
-node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${lancersId}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
-2. Bashで以下を実行して応募:
-node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${lancersId}.txt','utf8'); applyToJob('${lancersJob.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
-3. 成功なら "応募完了 [${lancersId}] ${lancersJob.title}" とだけ返答する
-4. 失敗なら エラー内容と "応募失敗 [${lancersId}]" と返答する
-
-※ auto-apply.jsは .env の LANCERS_EMAIL と LANCERS_PASSWORD を使ってログインして自動送信します`;
-      const task = taskDb.create(userId, instruction);
+      const task = taskDb.create(userId, buildDraftInstruction(lancersId, lancersJob));
       taskDb.approve(task.id);
-      await reply(`⚙️ [${lancersId}] ジュニアに指示中...`);
+      await reply(`📝 [${lancersId}] ドラフト生成中...\n完了したらDiscordに通知します。`);
       return;
     }
 
