@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { middleware, messagingApi, webhook } from '@line/bot-sdk';
 import Groq from 'groq-sdk';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
 import { taskDb } from './db';
 import { readFileSync, writeFileSync } from 'fs';
 
@@ -328,3 +329,102 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// ── Discord Bot（メッセージ受信） ──
+const DISCORD_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID ?? '';
+
+if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
+  const discordBot = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+  });
+
+  discordBot.on(Events.MessageCreate, async (msg) => {
+    if (msg.author.bot) return;
+    if (msg.channelId !== DISCORD_CHANNEL_ID) return;
+
+    const userText = msg.content.trim();
+    const userId = process.env.LINE_USER_ID ?? '';
+
+    const reply = async (text: string) => {
+      await msg.reply(text.slice(0, 2000)).catch(console.error);
+    };
+
+    // GO [ID] — Lancers案件を即実行
+    const goMatch = userText.match(/^GO\s+(\d+)$/i);
+    if (goMatch) {
+      const lancersId = goMatch[1].padStart(3, '0');
+      const lancersJob = lancersJobs.get(lancersId);
+      if (!lancersJob) {
+        await reply(`❌ ID: ${lancersId} の案件が見つかりません。`);
+        return;
+      }
+      const proposalB64 = Buffer.from(lancersJob.proposal || '', 'utf8').toString('base64');
+      const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
+
+手順:
+1. Bashで以下を実行してproposalファイルを作成:
+node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${lancersId}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
+2. Bashで以下を実行して応募:
+node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${lancersId}.txt','utf8'); applyToJob('${lancersJob.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
+3. 成功なら "応募完了 [${lancersId}] ${lancersJob.title}" とだけ返答する
+4. 失敗なら エラー内容と "応募失敗 [${lancersId}]" と返答する
+
+※ auto-apply.jsは .env の LANCERS_EMAIL と LANCERS_PASSWORD を使ってログインして自動送信します`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply(`⚙️ [${lancersId}] ジュニアに指示中...`);
+      return;
+    }
+
+    // STOP ALL
+    if (/^STOP\s*ALL$/i.test(userText)) {
+      const task = taskDb.create(userId, '__STOP_ALL__');
+      taskDb.approve(task.id);
+      await reply('🛑 STOP ALL 指示送信。10秒以内に停止します。');
+      return;
+    }
+
+    // START ALL
+    if (/^START\s*ALL$/i.test(userText)) {
+      const task = taskDb.create(userId, '__START_ALL__');
+      taskDb.approve(task.id);
+      await reply('▶️ START ALL 指示送信。10秒以内に再開します。');
+      return;
+    }
+
+    // DELIVER {id}
+    const deliverMatch = userText.match(/^DELIVER\s+(\d+)$/i);
+    if (deliverMatch) {
+      const appId = deliverMatch[1].padStart(3, '0');
+      const task = taskDb.create(userId, `node "C:/Users/merucari/.claude/scripts/lancers-pipeline/delivery.js" "${appId}" を実行して、結果を報告してください。`);
+      taskDb.approve(task.id);
+      await reply(`📝 [${appId}] 納品コンテンツ生成中...`);
+      return;
+    }
+
+    // SHOW_DELIVERY {id}
+    const showDeliveryMatch = userText.match(/^SHOW_DELIVERY\s+(\d+)$/i);
+    if (showDeliveryMatch) {
+      const appId = showDeliveryMatch[1].padStart(3, '0');
+      const task = taskDb.create(userId, `node -e "const l=require('C:/Users/merucari/.claude/scripts/lancers-pipeline/logger.js'); const d=l.getDelivery('${appId}'); if(d){console.log('【納品物全文】\\n'+d.content);}else{console.log('納品物が見つかりません: ${appId}');}" を実行して結果を報告してください。`);
+      taskDb.approve(task.id);
+      await reply(`📄 [${appId}] 全文取得中...`);
+      return;
+    }
+
+    // 通常メッセージ → 即実行
+    const task = taskDb.create(userId, userText);
+    taskDb.approve(task.id);
+    await reply(`⚡ 受信。ジュニアが実行中...\n「${userText.slice(0, 40)}${userText.length > 40 ? '…' : ''}」`);
+  });
+
+  discordBot.once(Events.ClientReady, (c) => {
+    console.log(`Discord Bot ready: ${c.user.tag}`);
+  });
+
+  discordBot.login(process.env.DISCORD_BOT_TOKEN).catch(console.error);
+}
