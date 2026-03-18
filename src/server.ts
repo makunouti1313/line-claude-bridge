@@ -75,11 +75,15 @@ app.post('/lancers/job', express.json(), async (req, res) => {
 
   if (job.autoApply) {
     // スコア >= 70: 承認不要で即タスク作成 → agent.ts が自動実行
+    // proposalをbase64でエンコードして渡す（Windows CLIの日本語文字化け対策）
+    const proposalB64 = Buffer.from(job.proposal || '', 'utf8').toString('base64');
     const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
 
 手順:
-1. Bashで実行: node "C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js" "${job.url}" "${(job.proposal || '').replace(/"/g, '\\"').replace(/\n/g, ' ')}"
-2. 実行結果（成功/失敗）を確認する
+1. Bashで以下を実行してproposalファイルを作成:
+node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${id}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
+2. Bashで以下を実行して応募:
+node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${id}.txt','utf8'); applyToJob('${job.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
 3. 成功なら "応募完了 [${id}] ${job.title}" とだけ返答する
 4. 失敗なら エラー内容と "応募失敗 [${id}]" と返答する
 
@@ -153,12 +157,16 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `❌ ID: ${lancersId} の案件が見つかりません。\n案件は再起動でリセットされます。` }] });
         continue;
       }
-      // ジュニアへの指示を作成して即承認 → agent.tsが10秒以内に実行
+      // ジュニアへの指示を作成して即承認 → agent.tsが5秒以内に実行
+      // proposalをbase64でエンコードして渡す（Windows CLIの日本語文字化け対策）
+      const proposalB64 = Buffer.from(lancersJob.proposal || '', 'utf8').toString('base64');
       const instruction = `以下のLancers案件にPlaywrightで自動応募してください。
 
 手順:
-1. Bashで実行: node "C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js" "${lancersJob.url}" "${lancersJob.proposal.replace(/"/g, '\\"').replace(/\n/g, ' ')}"
-2. 実行結果（成功/失敗）を確認する
+1. Bashで以下を実行してproposalファイルを作成:
+node -e "require('fs').mkdirSync('C:/Temp',{recursive:true}); require('fs').writeFileSync('C:/Temp/aether_${lancersId}.txt', Buffer.from('${proposalB64}','base64').toString('utf8'), 'utf8'); console.log('written');"
+2. Bashで以下を実行して応募:
+node -e "require('dotenv').config({path:'C:/Users/merucari/.openclaw/workspace/ping-test/.env'}); const {applyToJob}=require('C:/Users/merucari/.openclaw/workspace/ping-test/auto-apply.js'); const p=require('fs').readFileSync('C:/Temp/aether_${lancersId}.txt','utf8'); applyToJob('${lancersJob.url}',p).then(r=>{console.log('応募完了:',JSON.stringify(r)); process.exit(0);}).catch(e=>{console.error('応募失敗:',e.message); process.exit(1);});"
 3. 成功なら "応募完了 [${lancersId}] ${lancersJob.title}" とだけ返答する
 4. 失敗なら エラー内容と "応募失敗 [${lancersId}]" と返答する
 

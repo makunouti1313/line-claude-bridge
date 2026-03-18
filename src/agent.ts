@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 
 const SERVER_URL = process.env.SERVER_URL!;
 const AGENT_API_KEY = process.env.AGENT_API_KEY!;
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = 5_000;
 const MAX_RETRIES = 3;
 
 type Task = {
@@ -94,11 +94,17 @@ async function processTask(task: Task): Promise<void> {
 }
 
 let isProcessing = false;
+let lastWakeTime = 0;
 
 async function poll(): Promise<void> {
   if (isProcessing) return;
   try {
-    await wakeRender(); // スリープ回避：poll前に必ず起こす
+    // wakeRender は最大1回/分（毎poll実行すると最大78秒ブロックする）
+    const now = Date.now();
+    if (now - lastWakeTime > 60_000) {
+      await wakeRender();
+      lastWakeTime = Date.now();
+    }
     const tasks = await fetchApprovedTasks();
     if (tasks.length === 0) return;
     isProcessing = true;
