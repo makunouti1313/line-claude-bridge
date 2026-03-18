@@ -171,6 +171,22 @@ async function wakeRender(): Promise<void> {
   }
 }
 
+/** 今日の nightly batch summary を読む */
+function readNightlyBatchSummary(): { generated: number; errors: number; titles: string[] } | null {
+  try {
+    const { readFileSync } = require('fs');
+    const { join } = require('path');
+    const today = new Date().toLocaleDateString('sv', { timeZone: 'Asia/Tokyo' });
+    const p = join('C:/Users/merucari/.claude/scripts/lancers-pipeline/drafts/nightly_batch', today, 'summary.json');
+    const s = JSON.parse(readFileSync(p, 'utf8'));
+    return {
+      generated: s.generated?.length ?? 0,
+      errors:    s.errors?.length ?? 0,
+      titles:    (s.generated ?? []).slice(0, 3).map((g: { title: string }) => g.title),
+    };
+  } catch { return null; }
+}
+
 // 毎日8:00 JST (23:00 UTC) にブリーフィング
 let lastBriefingDate = '';
 async function checkDailyBriefing(): Promise<void> {
@@ -219,15 +235,22 @@ async function sendDailyBriefing(): Promise<void> {
     });
 
     const briefing = res.choices[0].message.content ?? '';
-    const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
-    const message = `☀️ ${now} ジュニアだ。\n\n${briefing}`;
+    const nowStr = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
+
+    // 夜間バッチの結果を確認して追記
+    const batch = readNightlyBatchSummary();
+    const batchLine = batch
+      ? `\n\n📝 夜間バッチ完了: ${batch.generated}件生成（エラー${batch.errors}件）\n${batch.titles.map(t => `• ${t}`).join('\n')}\n→ drafts/nightly_batch/ を確認して手動投稿してください。`
+      : '';
+
+    const message = `☀️ ${nowStr} ジュニアだ。\n\n${briefing}${batchLine}`;
 
     const discordUrl = process.env.DISCORD_WEBHOOK_URL;
     if (discordUrl) {
       await fetch(discordUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: message }),
+        body: JSON.stringify({ content: message.slice(0, 2000) }),
       });
     } else {
       await fetch(`${SERVER_URL}/notify`, {
@@ -236,7 +259,7 @@ async function sendDailyBriefing(): Promise<void> {
         body: JSON.stringify({ to: lineUserId, message }),
       });
     }
-    console.log(`[${new Date().toISOString()}] Daily briefing sent`);
+    console.log(`[${new Date().toISOString()}] Daily briefing sent (batch: ${batch?.generated ?? 'none'})`);
   } catch (err) {
     console.error('Briefing error:', err);
   }
