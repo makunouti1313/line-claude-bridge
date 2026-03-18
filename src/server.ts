@@ -423,6 +423,16 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
       return;
     }
 
+    // SUBMIT [draftId] — Gumroad投稿用テキスト出力
+    const submitMatch = userText.match(/^SUBMIT\s+(\d+)$/i);
+    if (submitMatch) {
+      const instruction = `__PRODUCT_SUBMIT__:${submitMatch[1]}`;
+      const task = taskDb.create(userId, instruction);
+      taskDb.approve(task.id);
+      await reply(`📦 [${submitMatch[1]}] Gumroad用テキストを準備中...`);
+      return;
+    }
+
     // START [テーマ] — eBook生成
     const startMatch = userText.match(/^START\s+(.+)$/i);
     if (startMatch) {

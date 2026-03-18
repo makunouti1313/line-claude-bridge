@@ -82,6 +82,22 @@ async function processTask(task: Task): Promise<void> {
     return;
   }
 
+  // ── Gumroad投稿テキスト出力 ──
+  if (task.instruction.startsWith('__PRODUCT_SUBMIT__:')) {
+    const draftId = task.instruction.split(':')[1];
+    try {
+      const { execSync: ex } = require('child_process');
+      const result = ex(
+        `node -e "const f=require('./modules/feedback-log'); const d=f.getDrafts().find(d=>String(d.id)==='${draftId}'); if(!d){console.log('ドラフトが見つかりません: ${draftId}'); process.exit(1);} const fs=require('fs'),path=require('path'); const md=fs.readFileSync(path.join('./products',d.safeName+'.md'),'utf8'); const lines=md.split('\\n'); const titleLine=lines.find(l=>l.startsWith('# '))||''; const salesSection=md.split('## 販売情報')[1]||'（販売情報なし）'; console.log(['=== Gumroad投稿用テキスト ===','','【タイトル】',titleLine.replace('# ',''),'','【価格】¥'+d.price,'','【説明文・販売ページ本文】',salesSection.trim(),'','=== 原稿ファイル ===','products/'+d.safeName+'.md'].join('\\n'));"`,
+        { encoding: 'utf8', cwd: 'C:/Users/merucari/.openclaw/workspace/ping-test', env: { ...process.env } }
+      );
+      await reportResult(task, result.trim());
+    } catch (e: unknown) {
+      await reportResult(task, `SUBMIT失敗: ${(e as Error).message?.slice(0, 100)}`, true);
+    }
+    return;
+  }
+
   // ── コスト管理コマンド ──
   if (task.instruction === '__RESUME_COST__') {
     await costMonitor.resume();
