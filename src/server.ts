@@ -92,27 +92,22 @@ async function sendDiscord(content: string): Promise<void> {
   }
 }
 
-/** ドラフト生成指示（auto-apply.js は使わない・提出は人間が手動） */
-function buildDraftInstruction(id: string, job: LancersJob): string {
-  return `以下のLancers案件の応募文ドラフトを生成してローカルに保存してください。
-
-案件ID: ${id}
-タイトル: ${job.title}
-URL: ${job.url}
-予算: ${job.budgetText || '不明'}
-スコア: ${job.score}点
-${job.reason ? `選定理由: ${job.reason}` : ''}
-
-既存の提案文（ベースとして使用）:
-${job.proposal || '（未生成）'}
+/** 自動応募指示（http-apply.js を使ってLancersに直接POST送信） */
+function buildAutoApplyInstruction(id: string, job: LancersJob): string {
+  // 提案文の改行をスペースに変換（コマンドライン引数として安全に渡すため）
+  const safeProposal = (job.proposal || '').replace(/\n/g, ' ').replace(/"/g, '\\"');
+  return `以下のLancers案件にhttp-apply.jsで自動応募してください。
 
 手順:
-1. node -e "require('fs').mkdirSync('C:/Users/merucari/.claude/scripts/lancers-pipeline/drafts',{recursive:true});" を実行
-2. 上記案件に合わせた高品質な応募文ドラフトを作成する（800〜1200文字、具体的・読み手が一目で採用したくなる内容）
-3. ドラフトをMarkdown形式で C:/Users/merucari/.claude/scripts/lancers-pipeline/drafts/${id}.md に保存する
-4. "ドラフト完了 [${id}] ${job.title}" とだけ返答する
+1. 以下のコマンドをBashで実行する:
+   cd "C:/Users/merucari/.openclaw/workspace/ping-test" && APPLY_DELAY_MS=0 node http-apply.js "${job.url}" "${safeProposal}"
 
-絶対禁止: auto-apply.js の実行・ブラウザ操作・応募ボタンのクリック。提出は人間が手動で行う。`;
+2. 実行結果を確認する
+3. 成功（{"success":true}）なら "応募完了 [${id}] ${job.title}" とだけ返答する
+4. 失敗なら エラー内容と "応募失敗 [${id}]" を返答する
+
+※ http-apply.jsはPlaywrightなしで動作します（HTTPリクエストのみ）
+※ .envの LANCERS_EMAIL / LANCERS_PASSWORD を使用します`;
 }
 
 function buildApprovalCard(task: { id: number; instruction: string }): string {
@@ -143,9 +138,9 @@ app.post('/lancers/job', express.json(), async (req, res) => {
 
   const lineUserId = process.env.LINE_USER_ID || 'U5ff819a7a20ddd21ecc14ff2a4ed4813';
 
-  // 全案件: 承認カード送信（auto-submitは禁止。提出は人間が手動で行う）
+  // 全案件: 承認カード送信（GO で自動応募）
   const card = [
-    `📋 案件カード [ID: ${id}]`,
+    `📋 案件承認カード [ID: ${id}]`,
     `${job.scoreLabel} (${job.score}点)`,
     job.reason ? `理由: ${job.reason}` : '',
     ``,
@@ -153,7 +148,7 @@ app.post('/lancers/job', express.json(), async (req, res) => {
     `【予算】${job.budgetText || '不明'}`,
     `【URL】${job.url}`,
     ``,
-    `✅ ドラフト生成 → "GO ${id}"`,
+    `✅ 自動応募 → LINEで "GO ${id}"`,
     `❌ スキップ → 無視でOK`,
   ].filter(Boolean).join('\n');
   enqueueDiscord(card);
@@ -189,9 +184,9 @@ app.post('/webhook', middleware(lineConfig), async (req, res) => {
         await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `❌ ID: ${lancersId} の案件が見つかりません。\n案件は再起動でリセットされます。` }] });
         continue;
       }
-      const task = taskDb.create(userId, buildDraftInstruction(lancersId, lancersJob));
+      const task = taskDb.create(userId, buildAutoApplyInstruction(lancersId, lancersJob));
       taskDb.approve(task.id);
-      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `📝 [${lancersId}] ドラフト生成中...完了したらDiscordに通知します。` }] });
+      await lineClient.replyMessage({ replyToken, messages: [{ type: 'text', text: `⚙️ [${lancersId}] 自動応募開始...\n「${lancersJob.title.slice(0, 30)}」\n完了したら通知します。` }] });
       continue;
     }
 
@@ -363,9 +358,9 @@ if (process.env.DISCORD_BOT_TOKEN && DISCORD_CHANNEL_ID) {
         await reply(`❌ ID: ${lancersId} の案件が見つかりません。`);
         return;
       }
-      const task = taskDb.create(userId, buildDraftInstruction(lancersId, lancersJob));
+      const task = taskDb.create(userId, buildAutoApplyInstruction(lancersId, lancersJob));
       taskDb.approve(task.id);
-      await reply(`📝 [${lancersId}] ドラフト生成中...\n完了したらDiscordに通知します。`);
+      await reply(`⚙️ [${lancersId}] 自動応募開始...\n「${lancersJob.title.slice(0, 30)}」\n完了したら通知します。`);
       return;
     }
 
